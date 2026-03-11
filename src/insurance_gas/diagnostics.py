@@ -26,8 +26,8 @@ class DiagnosticsResult:
         p-value for the KS uniformity test.
     ds_score:
         Dawid-Sebastiani proper scoring rule (lower is better).
-    score_residuals_acf:
-        Autocorrelation of score residuals at lags 1-20.
+    acf_values:
+        Autocorrelation of score residuals at lags 0-20.
     ljung_box_pvalue:
         p-value for the Ljung-Box test on score residuals.
     """
@@ -36,7 +36,7 @@ class DiagnosticsResult:
     ks_statistic: float
     ks_pvalue: float
     ds_score: float
-    score_residuals_acf: NDArray[np.float64]
+    acf_values: NDArray[np.float64]
     ljung_box_pvalue: float
 
     def summary(self) -> str:
@@ -63,10 +63,10 @@ class DiagnosticsResult:
         from .plotting import plot_pit_histogram
         return plot_pit_histogram(self.pit_values, ax=ax)
 
-    def score_residuals_acf(self, ax=None):
+    def plot_acf(self, ax=None):
         """Plot ACF of score residuals."""
         from .plotting import plot_acf
-        return plot_acf(self.score_residuals_acf, ax=ax)
+        return plot_acf(self.acf_values, ax=ax)
 
 
 def compute_diagnostics(result) -> DiagnosticsResult:
@@ -88,13 +88,9 @@ def compute_diagnostics(result) -> DiagnosticsResult:
     filter_path = result.filter_path
     time_varying = model.time_varying
 
-    # Retrieve original data if stored, otherwise use score residuals
-    # PIT values require the original y; we compute them from the filter path.
-    # If y is not stored, we use approximate PIT from score residuals.
     y = getattr(result, "_y", None)
 
     if y is not None:
-        # Compute PIT values
         T = len(y)
         pit_vals = np.zeros(T)
         rng = np.random.default_rng(42)
@@ -104,26 +100,22 @@ def compute_diagnostics(result) -> DiagnosticsResult:
             for sname in model._build_static_param_names():
                 params_t[sname] = result.params[sname]
 
-            # Continuous: PIT = F(y_t | params_t)
-            # Discrete: randomised PIT = U * (F(y_t) - F(y_t - 1)) + F(y_t - 1)
             if isinstance(dist, (PoissonGAS, NegBinGAS, ZIPGAS)):
                 pit_vals[t] = _randomised_pit_discrete(dist, float(y[t]), params_t, rng)
             else:
                 pit_vals[t] = _pit_continuous(dist, float(y[t]), params_t)
     else:
-        # Approximate: transform score residuals to (0,1) via standard normal
         sr = result.score_residuals.iloc[:, 0].values
         pit_vals = stats.norm.cdf(sr)
 
     # KS test for uniformity
     ks_stat, ks_p = stats.kstest(pit_vals, "uniform")
 
-    # Dawid-Sebastiani score: mean prediction error / std + 2*log(std)
-    # Use score residuals as prediction errors
+    # Dawid-Sebastiani score
     sr = result.score_residuals.iloc[:, 0].values
     ds_mean = float(np.mean(sr**2 + 2.0 * np.log(np.abs(sr) + 1e-10)))
 
-    # ACF of score residuals (first time-varying param)
+    # ACF of score residuals
     acf_vals = _compute_acf(sr, nlags=20)
 
     # Ljung-Box test
@@ -139,7 +131,7 @@ def compute_diagnostics(result) -> DiagnosticsResult:
         ks_statistic=float(ks_stat),
         ks_pvalue=float(ks_p),
         ds_score=ds_mean,
-        score_residuals_acf=acf_vals,
+        acf_values=acf_vals,
         ljung_box_pvalue=lb_p,
     )
 
@@ -219,10 +211,7 @@ def pit_residuals(
     params: dict[str, float],
     rng: np.random.Generator | None = None,
 ) -> NDArray[np.float64]:
-    """Compute PIT residuals for a given series and filter path.
-
-    This is a standalone function for use outside the result object.
-    """
+    """Compute PIT residuals for a given series and filter path."""
     if rng is None:
         rng = np.random.default_rng(42)
     from .distributions import PoissonGAS, NegBinGAS, ZIPGAS
@@ -253,18 +242,5 @@ def dawid_sebastiani_score(
     DS(F, y) = (y - mu)^2 / sigma^2 + 2 * log(sigma)
 
     Lower is better. Proper scoring rule for distributional forecasts.
-
-    Parameters
-    ----------
-    y:
-        Observed values.
-    mu:
-        Forecast means.
-    sigma:
-        Forecast standard deviations.
-
-    Returns
-    -------
-    Mean Dawid-Sebastiani score.
     """
     return float(np.mean(((y - mu) / sigma) ** 2 + 2.0 * np.log(sigma)))
