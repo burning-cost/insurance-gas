@@ -28,13 +28,7 @@ class ForecastResult:
     h: int
 
     def to_dataframe(self, param: str | None = None) -> pd.DataFrame:
-        """Return forecast as a DataFrame.
-
-        Parameters
-        ----------
-        param:
-            Which time-varying parameter to return. Uses the first if None.
-        """
+        """Return forecast as a DataFrame."""
         if param is None:
             param = next(iter(self.mean_path))
 
@@ -104,7 +98,6 @@ def gas_forecast(
         last_f[name] = float(dist.link(name, last_val))
 
     # Mean-path forecast: propagate without new observations
-    # f_{t+h} = omega + phi * f_{t+h-1} (no score update since E[score]=0)
     mean_paths: dict[str, list[float]] = {name: [] for name in time_varying}
     f_current = dict(last_f)
 
@@ -129,21 +122,27 @@ def gas_forecast(
             sim_step: dict[str, list[float]] = {name: [] for name in time_varying}
 
             for step in range(h):
-                # Sample one observation from current state
-                params_nat = {
-                    name: float(dist.unlink(name, f_sim[name]))
-                    for name in time_varying
-                }
+                # Natural-scale parameters
+                params_nat = {}
+                for name in time_varying:
+                    params_nat[name] = float(dist.unlink(name, f_sim[name]))
                 params_nat.update(static_params)
 
                 # Draw y from distribution
-                y_sim = _draw_sample(dist, params_nat, rng)
-                y_arr = np.array([y_sim])
+                try:
+                    y_sim = _draw_sample(dist, params_nat, rng)
+                except (ValueError, OverflowError):
+                    # Numerical issue — use mean
+                    y_sim = params_nat.get("mean", 1.0)
+                y_arr = np.array([float(y_sim)])
 
                 # Compute scaled score
-                ss = dist.scaled_score(
-                    y_arr, params_nat, scaling=model.scaling
-                )
+                try:
+                    ss = dist.scaled_score(
+                        y_arr, params_nat, scaling=model.scaling
+                    )
+                except Exception:
+                    ss = {name: 0.0 for name in time_varying}
 
                 # Update filter
                 f_next = {}
@@ -151,8 +150,12 @@ def gas_forecast(
                     omega = gas_params[f"omega_{name}"]
                     alpha_vals = [gas_params[f"alpha_{name}_{i+1}"] for i in range(model.p)]
                     phi_vals = [gas_params[f"phi_{name}_{j+1}"] for j in range(model.q)]
-                    score_val = float(np.squeeze(ss[name]))
+                    score_val = float(np.squeeze(ss[name]) if hasattr(ss[name], '__len__') else ss[name])
+                    if not np.isfinite(score_val):
+                        score_val = 0.0
                     val = omega + alpha_vals[0] * score_val + phi_vals[0] * f_sim[name]
+                    # Clamp to avoid divergence
+                    val = np.clip(val, -20.0, 20.0)
                     f_next[name] = val
                     sim_step[name].append(float(dist.unlink(name, val)))
 
@@ -169,14 +172,14 @@ def gas_forecast(
                 paths_arr = np.array(sim_paths[name])  # (n_sim, h)
                 q_results[q][name] = np.quantile(paths_arr, q, axis=0)
     else:
-        # Mean-path only: quantile = mean for all
+        # Mean-path only
         q_results = {q: {name: mean_path_arrays[name] for name in time_varying} for q in quantiles}
 
     return ForecastResult(mean_path=mean_path_arrays, quantiles=q_results, h=h)
 
 
 def _draw_sample(
-    dist: "GASDistribution",
+    dist,
     params: dict[str, float],
     rng: np.random.Generator,
 ) -> float:
@@ -184,26 +187,31 @@ def _draw_sample(
     from .distributions import PoissonGAS, GammaGAS, NegBinGAS, LogNormalGAS, BetaGAS, ZIPGAS
 
     if isinstance(dist, PoissonGAS):
-        return float(rng.poisson(params["mean"]))
+        lam = min(float(params["mean"]), 1e6)  # clamp to avoid overflow
+        return float(rng.poisson(lam))
     elif isinstance(dist, GammaGAS):
         shape = params.get("shape", 1.0)
-        return float(rng.gamma(shape=shape, scale=params["mean"] / shape))
+        scale = min(float(params["mean"]) / max(float(shape), 1e-8), 1e8)
+        return float(rng.gamma(shape=shape, scale=scale))
     elif isinstance(dist, NegBinGAS):
-        mu = params["mean"]
-        r = params.get("dispersion", 1.0)
+        mu = float(params["mean"])
+        r = float(params.get("dispersion", 1.0))
         p = r / (r + mu)
-        return float(rng.negative_binomial(r, p))
+        p = float(np.clip(p, 1e-8, 1.0 - 1e-8))
+        return float(rng.negative_binomial(max(int(round(r)), 1), p))
     elif isinstance(dist, LogNormalGAS):
-        sigma = params.get("logsigma", 0.5)
-        return float(rng.lognormal(mean=params["logmean"], sigma=sigma))
+        sigma = float(params.get("logsigma", 0.5))
+        logmean = float(params.get("logmean", 0.0))
+        return float(rng.lognormal(mean=np.clip(logmean, -20, 20), sigma=np.clip(sigma, 1e-8, 10)))
     elif isinstance(dist, BetaGAS):
-        mu = params["mean"]
-        phi = params.get("precision", 10.0)
+        mu = float(np.clip(params["mean"], 1e-6, 1.0 - 1e-6))
+        phi = float(params.get("precision", 10.0))
         return float(rng.beta(mu * phi, (1.0 - mu) * phi))
     elif isinstance(dist, ZIPGAS):
-        pi = params.get("zeroprob", 0.1)
+        pi = float(params.get("zeroprob", 0.1))
         if rng.random() < pi:
             return 0.0
-        return float(rng.poisson(params["mean"]))
+        lam = min(float(params["mean"]), 1e6)
+        return float(rng.poisson(lam))
     else:
         raise NotImplementedError(f"Sampling not implemented for {type(dist).__name__}")

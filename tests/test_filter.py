@@ -89,27 +89,28 @@ class TestGASFilterBasic:
 
     def test_score_residuals_zero_at_mean(self):
         """With constant data at the fitted mean and alpha→0, score residuals are 0."""
-        # High persistence, tiny alpha: filter barely moves from initial
         omega = np.log(2.0) * 0.001
         phi = 0.999
         gas_params = {"omega_mean": omega, "alpha_mean_1": 0.001, "phi_mean_1": phi}
         y = np.full(30, 2.0)
         r = self.filt.run(y, gas_params, {})
-        # Score residuals at y=mu are 0 (with fisher_inv: (y/mu-1)/mu * 1/fisher)
-        # Actually score = y/rate - 1; at y=rate, score = 0
-        # Rate = mu * 1 (no exposure), y=2, initial mu≈2 → most scores ≈ 0
         assert np.abs(np.mean(r.score_residuals["mean"])) < 0.5
 
     def test_exposure_weighted_filter(self):
-        """Filter with exposure should use effective rate mu*E."""
-        y = np.full(20, 6.0)  # 6 claims per period
-        exposure = np.full(20, 3.0)  # 3 units each
-        # With mu=2, E=3: rate=6, y=6 → score=0, filter stays at 2
-        gas_params = {"omega_mean": 0.01, "alpha_mean_1": 0.1, "phi_mean_1": 0.9}
-        r = self.filt.run(y, gas_params, {}, exposure=exposure)
-        # All scores should be near 0
+        """Filter with exposure should use effective rate mu*E.
+
+        When y = mu*E exactly (y=6, mu=2, E=3), the score y/(mu*E) - 1 = 0,
+        so the filter should not move. We set f0 explicitly so mu starts at 2.
+        """
+        y = np.full(20, 6.0)
+        exposure = np.full(20, 3.0)
+        gas_params = {"omega_mean": 0.0, "alpha_mean_1": 0.3, "phi_mean_1": 0.9}
+        # f0 = log(2) so mu starts at exactly 2
+        f0 = {"mean": np.log(2.0)}
+        r = self.filt.run(y, gas_params, {}, exposure=exposure, f0=f0)
+        # With y/rate = 6/(2*3) = 1 at every step, score = 0
         np.testing.assert_allclose(
-            r.score_residuals["mean"], np.zeros(20), atol=0.2
+            r.score_residuals["mean"], np.zeros(20), atol=1e-10
         )
 
 
