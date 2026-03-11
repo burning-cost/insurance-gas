@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "insurance-gas"
+version = "0.1.0"
+description = "GAS (Generalised Autoregressive Score) models for dynamic insurance pricing"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Burning Cost", email = "pricing.frontier@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/insurance_gas"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
