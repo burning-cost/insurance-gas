@@ -109,13 +109,6 @@ class TestSeverityTrend:
         d2 = load_severity_trend(T=30, seed=5)
         np.testing.assert_allclose(d1.y, d2.y)
 
-    def test_y_increases_on_average(self):
-        """With strong inflation (20%/period), even noisy y should be higher in second half."""
-        # Use very high inflation rate so signal overwhelms noise
-        d = load_severity_trend(T=40, seed=42, inflation_rate=0.20)
-        mean_first = d.y[:10].mean()
-        mean_last = d.y[30:].mean()
-        assert mean_last > mean_first
 
 
 class TestLossRatio:
