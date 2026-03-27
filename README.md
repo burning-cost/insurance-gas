@@ -1,3 +1,5 @@
+⚠️ **This package has been merged into [`insurance-dynamics`](https://github.com/burning-cost/insurance-dynamics).** This repository is archived. Install `insurance-dynamics` instead.
+
 # insurance-gas
 
 GAS (Generalised Autoregressive Score) models for dynamic insurance pricing.
